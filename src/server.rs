@@ -1,3 +1,5 @@
+#![feature(async_closure, async_fn_traits)]
+
 use crate::client::ClientConnection;
 use crate::metrics::Metrics;
 use crate::rate_limit::{RateLimit, RateLimitError};
