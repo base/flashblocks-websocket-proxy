@@ -433,6 +433,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(all(feature = "integration", test))]
     async fn test_redis_rate_limits_with_mock() {
         use redis_test::server::RedisServer;
 
