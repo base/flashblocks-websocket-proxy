@@ -6,6 +6,8 @@ on:
       - 'master'
     tags:
       - 'v*'
+  release:
+    types: [published]
 
 env:
   REGISTRY: ghcr.io
@@ -30,6 +32,14 @@ jobs:
         uses: docker/metadata-action@v4
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # For regular pushes to master
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
+            # For releases
+            type=semver,pattern={{version}},value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
+            type=raw,value=release,enable=${{ github.event_name == 'release' }}
+            type=sha,format=long
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
