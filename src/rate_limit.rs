@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
-use tracing::{debug, warn};
+use tracing::{debug, error, info, warn};
 
 use thiserror::Error;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use redis::{Client, Commands, RedisError};
-use tracing::error;
 
 #[derive(Error, Debug)]
 pub enum RateLimitError {
@@ -138,13 +137,22 @@ impl RedisRateLimit {
     ) -> Result<Self, RedisError> {
         let client = Client::open(redis_url)?;
 
-        Ok(Self {
+        let limiter = Self {
             redis_client: client,
             global_limit,
             per_ip_limit,
             semaphore: Arc::new(Semaphore::new(global_limit)),
             key_prefix: key_prefix.to_string(),
-        })
+        };
+
+        if let Err(e) = limiter.reset_counters() {
+            error!(
+                message = "Failed to reset Redis counters on startup",
+                error = e.to_string()
+            );
+        }
+
+        Ok(limiter)
     }
 
     /// Get Redis key for tracking global connections
@@ -155,6 +163,29 @@ impl RedisRateLimit {
     /// Get Redis key for tracking connections per IP
     fn ip_key(&self, addr: &IpAddr) -> String {
         format!("{}:ip:{}:connections", self.key_prefix, addr)
+    }
+
+    /// Reset all Redis counters associated with this rate limiter
+    pub fn reset_counters(&self) -> Result<(), RedisError> {
+        let mut conn = self.redis_client.get_connection()?;
+
+        // Delete the global counter
+        let _: () = conn.del(self.global_key())?;
+
+        // Find and delete all IP-specific counters with this prefix
+        let pattern = format!("{}:ip:*:connections", self.key_prefix);
+        let keys: Vec<String> = conn.keys(pattern)?;
+
+        if !keys.is_empty() {
+            let _: () = conn.del(keys)?;
+        }
+
+        info!(
+            message = "Reset all Redis rate limit counters",
+            prefix = self.key_prefix
+        );
+
+        Ok(())
     }
 }
 
