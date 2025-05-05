@@ -334,6 +334,15 @@ impl RateLimit for RedisRateLimit {
     fn try_acquire(self: Arc<Self>, addr: IpAddr) -> Result<Ticket, RateLimitError> {
         self.clone().start_background_tasks();
 
+        let permit = match self.semaphore.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                return Err(RateLimitError::Limit {
+                    reason: "Maximum connection limit reached for this server instance".to_string(),
+                });
+            }
+        };
+
         let mut conn = match self.redis_client.get_connection() {
             Ok(conn) => conn,
             Err(e) => {
@@ -403,15 +412,6 @@ impl RateLimit for RedisRateLimit {
                 reason: format!("Per-IP connection limit reached for {}", addr),
             });
         }
-
-        let permit = match self.semaphore.clone().try_acquire_owned() {
-            Ok(permit) => permit,
-            Err(_) => {
-                return Err(RateLimitError::Limit {
-                    reason: "Maximum connection limit reached for this server instance".to_string(),
-                });
-            }
-        };
 
         let ip_instance_connections: usize = match conn.incr(self.ip_instance_key(&addr), 1) {
             Ok(count) => count,
@@ -597,6 +597,110 @@ mod tests {
 
         let c4 = rate_limiter.clone().try_acquire(user_2);
         assert!(c4.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_global_limits_with_multiple_ips() {
+        let user_1 = IpAddr::from_str("127.0.0.1").unwrap();
+        let user_2 = IpAddr::from_str("127.0.0.2").unwrap();
+        let user_3 = IpAddr::from_str("127.0.0.3").unwrap();
+
+        let rate_limiter = Arc::new(InMemoryRateLimit::new(4, 3));
+
+        let ticket_1_1 = rate_limiter.clone().try_acquire(user_1).unwrap();
+        let ticket_1_2 = rate_limiter.clone().try_acquire(user_1).unwrap();
+
+        let ticket_2_1 = rate_limiter.clone().try_acquire(user_2).unwrap();
+        let ticket_2_2 = rate_limiter.clone().try_acquire(user_2).unwrap();
+
+        assert_eq!(
+            rate_limiter
+                .inner
+                .lock()
+                .unwrap()
+                .semaphore
+                .available_permits(),
+            0
+        );
+
+        // Try user_3 - should fail due to global limit
+        let result = rate_limiter.clone().try_acquire(user_3);
+        assert!(result.is_err());
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "Rate Limit Reached: Global limit"
+        );
+
+        drop(ticket_1_1);
+
+        let ticket_3_1 = rate_limiter.clone().try_acquire(user_3).unwrap();
+
+        drop(ticket_1_2);
+        drop(ticket_2_1);
+        drop(ticket_2_2);
+        drop(ticket_3_1);
+
+        assert_eq!(
+            rate_limiter
+                .inner
+                .lock()
+                .unwrap()
+                .semaphore
+                .available_permits(),
+            4
+        );
+        assert_eq!(
+            rate_limiter.inner.lock().unwrap().active_connections.len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn test_per_ip_limits_remain_enforced() {
+        let user_1 = IpAddr::from_str("127.0.0.1").unwrap();
+        let user_2 = IpAddr::from_str("127.0.0.2").unwrap();
+
+        let rate_limiter = Arc::new(InMemoryRateLimit::new(5, 2));
+
+        let ticket_1_1 = rate_limiter.clone().try_acquire(user_1).unwrap();
+        let ticket_1_2 = rate_limiter.clone().try_acquire(user_1).unwrap();
+
+        let result = rate_limiter.clone().try_acquire(user_1);
+        assert!(result.is_err());
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "Rate Limit Reached: IP limit exceeded"
+        );
+
+        let ticket_2_1 = rate_limiter.clone().try_acquire(user_2).unwrap();
+        drop(ticket_1_1);
+
+        let ticket_1_3 = rate_limiter.clone().try_acquire(user_1).unwrap();
+
+        let result = rate_limiter.clone().try_acquire(user_1);
+        assert!(result.is_err());
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "Rate Limit Reached: IP limit exceeded"
+        );
+
+        drop(ticket_1_2);
+        drop(ticket_1_3);
+        drop(ticket_2_1);
+
+        assert_eq!(
+            rate_limiter
+                .inner
+                .lock()
+                .unwrap()
+                .semaphore
+                .available_permits(),
+            5
+        );
+        assert_eq!(
+            rate_limiter.inner.lock().unwrap().active_connections.len(),
+            0
+        );
     }
 
     #[tokio::test]
