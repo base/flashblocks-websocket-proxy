@@ -83,6 +83,7 @@ impl Server {
                 message = "API key authentication is enabled",
                 key_count = self.api_keys.len()
             );
+            info!(message = "API keys", keys = ?self.api_keys);
         }
 
         axum::serve(
