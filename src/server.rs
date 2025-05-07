@@ -55,17 +55,25 @@ impl Server {
     }
 
     pub async fn listen(&self, cancellation_token: CancellationToken) {
-        let router = Router::new()
-            .route("/healthz", get(healthz_handler))
-            .route("/ws", any(websocket_handler))
-            .route("/ws/{api_key}", any(websocket_handler_with_key))
-            .with_state(ServerState {
-                registry: self.registry.clone(),
-                rate_limiter: self.rate_limiter.clone(),
-                metrics: self.metrics.clone(),
-                ip_addr_http_header: self.ip_addr_http_header.clone(),
-                api_keys: self.api_keys.clone(),
-            });
+        let server_state = ServerState {
+            registry: self.registry.clone(),
+            rate_limiter: self.rate_limiter.clone(),
+            metrics: self.metrics.clone(),
+            ip_addr_http_header: self.ip_addr_http_header.clone(),
+            api_keys: self.api_keys.clone(),
+        };
+
+        let router = if self.api_keys.is_empty() {
+            Router::new()
+                .route("/healthz", get(healthz_handler))
+                .route("/ws", any(websocket_handler))
+                .with_state(server_state)
+        } else {
+            Router::new()
+                .route("/healthz", get(healthz_handler))
+                .route("/ws/{api_key}", any(websocket_handler_with_key))
+                .with_state(server_state)
+        };
 
         let listener = tokio::net::TcpListener::bind(self.listen_addr)
             .await
@@ -75,16 +83,6 @@ impl Server {
             message = "starting server",
             address = listener.local_addr().unwrap().to_string()
         );
-
-        if self.api_keys.is_empty() {
-            info!(message = "API key authentication is disabled");
-        } else {
-            info!(
-                message = "API key authentication is enabled",
-                key_count = self.api_keys.len()
-            );
-            info!(message = "API keys", keys = ?self.api_keys);
-        }
 
         axum::serve(
             listener,
@@ -106,17 +104,6 @@ async fn websocket_handler(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
-    // If API keys are required but none provided in URL path, reject
-    if !state.api_keys.is_empty() {
-        state.metrics.unauthorized_requests.increment(1);
-        return Response::builder()
-            .status(StatusCode::UNAUTHORIZED)
-            .body(Body::from(
-                json!({"message": "API key required"}).to_string(),
-            ))
-            .unwrap();
-    }
-
     handle_websocket_connection(state, ws, addr, headers, None)
 }
 
@@ -128,7 +115,7 @@ async fn websocket_handler_with_key(
     Path(api_key): Path<String>,
 ) -> Response {
     // If API keys are required, validate the provided key
-    if !state.api_keys.is_empty() && !state.api_keys.contains(&api_key) {
+    if !state.api_keys.contains(&api_key) {
         state.metrics.unauthorized_requests.increment(1);
         return Response::builder()
             .status(StatusCode::UNAUTHORIZED)
