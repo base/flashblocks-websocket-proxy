@@ -64,11 +64,16 @@ impl Server {
         };
 
         let router = if self.api_keys.is_empty() {
+            info!(message = "API key authentication is disabled");
             Router::new()
                 .route("/healthz", get(healthz_handler))
                 .route("/ws", any(websocket_handler))
                 .with_state(server_state)
         } else {
+            info!(
+                message = "API key authentication is enabled",
+                key_count = self.api_keys.len()
+            );
             Router::new()
                 .route("/healthz", get(healthz_handler))
                 .route("/ws/{api_key}", any(websocket_handler_with_key))
