@@ -176,7 +176,7 @@ fn handle_websocket_connection(
             } else {
                 key
             }
-        },
+        }
         None => "none".to_string(),
     };
     counter!("websocket_proxy.connections_by_api_key", "key" => key_value).increment(1);
