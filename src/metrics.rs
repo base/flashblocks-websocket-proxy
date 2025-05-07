@@ -21,6 +21,9 @@ pub struct Metrics {
     #[metric(describe = "Count of rate limited request")]
     pub rate_limited_requests: Counter,
 
+    #[metric(describe = "Count of unauthorized requests with invalid API keys")]
+    pub unauthorized_requests: Counter,
+
     #[metric(describe = "Count of times that a client lagged")]
     pub lag_events: Counter,
 

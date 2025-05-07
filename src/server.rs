@@ -3,7 +3,7 @@ use crate::metrics::Metrics;
 use crate::rate_limit::{RateLimit, RateLimitError};
 use crate::registry::Registry;
 use axum::body::Body;
-use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, Path, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
@@ -21,6 +21,7 @@ struct ServerState {
     rate_limiter: Arc<dyn RateLimit>,
     metrics: Arc<Metrics>,
     ip_addr_http_header: String,
+    api_keys: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -30,6 +31,7 @@ pub struct Server {
     rate_limiter: Arc<dyn RateLimit>,
     metrics: Arc<Metrics>,
     ip_addr_http_header: String,
+    api_keys: Vec<String>,
 }
 
 impl Server {
@@ -39,6 +41,7 @@ impl Server {
         metrics: Arc<Metrics>,
         rate_limiter: Arc<dyn RateLimit>,
         ip_addr_http_header: String,
+        api_keys: Vec<String>,
     ) -> Self {
         Self {
             listen_addr,
@@ -46,6 +49,7 @@ impl Server {
             rate_limiter,
             metrics,
             ip_addr_http_header,
+            api_keys,
         }
     }
 
@@ -53,11 +57,13 @@ impl Server {
         let router = Router::new()
             .route("/healthz", get(healthz_handler))
             .route("/ws", any(websocket_handler))
+            .route("/ws/:api_key", any(websocket_handler_with_key))
             .with_state(ServerState {
                 registry: self.registry.clone(),
                 rate_limiter: self.rate_limiter.clone(),
                 metrics: self.metrics.clone(),
                 ip_addr_http_header: self.ip_addr_http_header.clone(),
+                api_keys: self.api_keys.clone(),
             });
 
         let listener = tokio::net::TcpListener::bind(self.listen_addr)
@@ -68,6 +74,15 @@ impl Server {
             message = "starting server",
             address = listener.local_addr().unwrap().to_string()
         );
+        
+        if self.api_keys.is_empty() {
+            info!(message = "API key authentication is disabled");
+        } else {
+            info!(
+                message = "API key authentication is enabled",
+                key_count = self.api_keys.len()
+            );
+        }
 
         axum::serve(
             listener,
@@ -88,7 +103,46 @@ async fn websocket_handler(
     ws: WebSocketUpgrade,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-) -> impl IntoResponse {
+) -> Response {
+    // If API keys are required but none provided in URL path, reject
+    if !state.api_keys.is_empty() {
+        state.metrics.unauthorized_requests.increment(1);
+        return Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .body(Body::from(json!({"message": "API key required"}).to_string()))
+            .unwrap();
+    }
+
+    handle_websocket_connection(state, ws, addr, headers, None)
+}
+
+async fn websocket_handler_with_key(
+    State(state): State<ServerState>,
+    ws: WebSocketUpgrade,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(api_key): Path<String>,
+) -> Response {
+    // If API keys are required, validate the provided key
+    if !state.api_keys.is_empty() && !state.api_keys.contains(&api_key) {
+        state.metrics.unauthorized_requests.increment(1);
+        return Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .body(Body::from(json!({"message": "Invalid API key"}).to_string()))
+            .unwrap();
+    }
+
+    handle_websocket_connection(state, ws, addr, headers, Some(api_key))
+}
+
+// Common handler logic for both authenticated and unauthenticated paths
+fn handle_websocket_connection(
+    state: ServerState,
+    ws: WebSocketUpgrade,
+    addr: SocketAddr,
+    headers: HeaderMap,
+    _api_key: Option<String>, // Could be used for client tracking or rate limiting
+) -> Response {
     let connect_addr = addr.ip();
 
     let client_addr = match headers.get(state.ip_addr_http_header) {
@@ -170,5 +224,35 @@ mod tests {
         test("nonsense", fb);
         test("400.0.0.1", fb);
         test("120.0.0.1.0", fb);
+    }
+    
+    #[test]
+    fn test_api_key_validation() {
+        // Create a server state with API keys
+        let state = ServerState {
+            registry: Registry::new(tokio::sync::broadcast::channel(1).0, Arc::new(Metrics::default())),
+            rate_limiter: Arc::new(crate::rate_limit::InMemoryRateLimit::new(100, 10)),
+            metrics: Arc::new(Metrics::default()),
+            ip_addr_http_header: "X-Forwarded-For".to_string(),
+            api_keys: vec!["valid_key1".to_string(), "valid_key2".to_string()],
+        };
+        
+        // Test with valid key
+        assert!(state.api_keys.contains(&"valid_key1".to_string()));
+        
+        // Test with invalid key
+        assert!(!state.api_keys.contains(&"invalid_key".to_string()));
+        
+        // Test with empty API keys list
+        let no_auth_state = ServerState {
+            registry: Registry::new(tokio::sync::broadcast::channel(1).0, Arc::new(Metrics::default())),
+            rate_limiter: Arc::new(crate::rate_limit::InMemoryRateLimit::new(100, 10)),
+            metrics: Arc::new(Metrics::default()),
+            ip_addr_http_header: "X-Forwarded-For".to_string(),
+            api_keys: vec![],
+        };
+        
+        // Should allow any key when list is empty
+        assert!(no_auth_state.api_keys.is_empty());
     }
 }

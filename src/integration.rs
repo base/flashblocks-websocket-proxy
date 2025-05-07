@@ -52,6 +52,7 @@ mod test {
                     metrics,
                     rate_limited,
                     "header".to_string(),
+                    vec![],
                 ),
                 server_addr: addr,
                 client_id_to_handle: HashMap::new(),

@@ -117,6 +117,14 @@ struct Args {
         help = "Prefix for Redis keys"
     )]
     redis_key_prefix: String,
+
+    #[arg(
+        long,
+        env,
+        value_delimiter = ',',
+        help = "API keys to allow"
+    )]
+    api_keys: Vec<String>,
 }
 
 #[tokio::main]
@@ -265,6 +273,7 @@ async fn main() {
         metrics,
         rate_limiter,
         args.ip_addr_http_header,
+        args.api_keys,
     );
     let server_task = server.listen(token.clone());
 
