@@ -57,7 +57,7 @@ impl Server {
         let router = Router::new()
             .route("/healthz", get(healthz_handler))
             .route("/ws", any(websocket_handler))
-            .route("/ws/:api_key", any(websocket_handler_with_key))
+            .route("/ws/{api_key}", any(websocket_handler_with_key))
             .with_state(ServerState {
                 registry: self.registry.clone(),
                 rate_limiter: self.rate_limiter.clone(),
@@ -74,7 +74,7 @@ impl Server {
             message = "starting server",
             address = listener.local_addr().unwrap().to_string()
         );
-        
+
         if self.api_keys.is_empty() {
             info!(message = "API key authentication is disabled");
         } else {
@@ -109,7 +109,9 @@ async fn websocket_handler(
         state.metrics.unauthorized_requests.increment(1);
         return Response::builder()
             .status(StatusCode::UNAUTHORIZED)
-            .body(Body::from(json!({"message": "API key required"}).to_string()))
+            .body(Body::from(
+                json!({"message": "API key required"}).to_string(),
+            ))
             .unwrap();
     }
 
@@ -128,7 +130,9 @@ async fn websocket_handler_with_key(
         state.metrics.unauthorized_requests.increment(1);
         return Response::builder()
             .status(StatusCode::UNAUTHORIZED)
-            .body(Body::from(json!({"message": "Invalid API key"}).to_string()))
+            .body(Body::from(
+                json!({"message": "Invalid API key"}).to_string(),
+            ))
             .unwrap();
     }
 
@@ -224,35 +228,5 @@ mod tests {
         test("nonsense", fb);
         test("400.0.0.1", fb);
         test("120.0.0.1.0", fb);
-    }
-    
-    #[test]
-    fn test_api_key_validation() {
-        // Create a server state with API keys
-        let state = ServerState {
-            registry: Registry::new(tokio::sync::broadcast::channel(1).0, Arc::new(Metrics::default())),
-            rate_limiter: Arc::new(crate::rate_limit::InMemoryRateLimit::new(100, 10)),
-            metrics: Arc::new(Metrics::default()),
-            ip_addr_http_header: "X-Forwarded-For".to_string(),
-            api_keys: vec!["valid_key1".to_string(), "valid_key2".to_string()],
-        };
-        
-        // Test with valid key
-        assert!(state.api_keys.contains(&"valid_key1".to_string()));
-        
-        // Test with invalid key
-        assert!(!state.api_keys.contains(&"invalid_key".to_string()));
-        
-        // Test with empty API keys list
-        let no_auth_state = ServerState {
-            registry: Registry::new(tokio::sync::broadcast::channel(1).0, Arc::new(Metrics::default())),
-            rate_limiter: Arc::new(crate::rate_limit::InMemoryRateLimit::new(100, 10)),
-            metrics: Arc::new(Metrics::default()),
-            ip_addr_http_header: "X-Forwarded-For".to_string(),
-            api_keys: vec![],
-        };
-        
-        // Should allow any key when list is empty
-        assert!(no_auth_state.api_keys.is_empty());
     }
 }

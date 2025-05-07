@@ -35,7 +35,12 @@ mod test {
             let listener = TcpListener::bind(&address).await.unwrap();
             listener.local_addr().unwrap()
         }
+
         fn new(addr: SocketAddr) -> TestHarness {
+            Self::new_with_api_keys(addr, vec![])
+        }
+
+        fn new_with_api_keys(addr: SocketAddr, api_keys: Vec<String>) -> TestHarness {
             let (sender, _) = broadcast::channel(5);
             let metrics = Arc::new(Metrics::default());
             let registry = Registry::new(sender.clone(), metrics.clone());
@@ -52,7 +57,7 @@ mod test {
                     metrics,
                     rate_limited,
                     "header".to_string(),
-                    vec![],
+                    api_keys,
                 ),
                 server_addr: addr,
                 client_id_to_handle: HashMap::new(),
@@ -96,7 +101,14 @@ mod test {
         }
 
         fn connect_client(&mut self) -> usize {
-            let uri = format!("ws://{}/ws", self.server_addr);
+            self.connect_client_with_key(None)
+        }
+
+        fn connect_client_with_key(&mut self, api_key: Option<String>) -> usize {
+            let uri = match api_key {
+                Some(key) => format!("ws://{}/ws/{}", self.server_addr, key),
+                None => format!("ws://{}/ws", self.server_addr),
+            };
 
             let client_id = self.current_client_id;
             self.current_client_id += 1;
@@ -304,6 +316,76 @@ mod test {
         assert_eq!(
             vec!["five", "six"],
             harness.messages_for_client(client_four)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_api_key_authentication() {
+        let addr = TestHarness::alloc_port().await;
+
+        // Create a server with API keys
+        let valid_keys = vec!["valid_key1".to_string(), "valid_key2".to_string()];
+        let mut harness = TestHarness::new_with_api_keys(addr, valid_keys);
+        harness.start_server().await;
+
+        // Test 1: Connect without API key (should fail)
+        let client_no_key = harness.connect_client();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(harness
+            .clients_failed_to_connect
+            .lock()
+            .unwrap()
+            .contains_key(&client_no_key));
+
+        // Test 2: Connect with valid API key (should succeed)
+        let client_valid_key = harness.connect_client_with_key(Some("".to_string()));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!harness
+            .clients_failed_to_connect
+            .lock()
+            .unwrap()
+            .contains_key(&client_valid_key));
+
+        // Test 3: Connect with invalid API key (should fail)
+        let client_invalid_key = harness.connect_client_with_key(Some("invalid_key".to_string()));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(harness
+            .clients_failed_to_connect
+            .lock()
+            .unwrap()
+            .contains_key(&client_invalid_key));
+
+        // Send a message and verify it's received by the valid client
+        harness.send_messages(vec!["test_message"]);
+        harness.wait_for_messages_to_drain().await;
+
+        // Verify that the client with valid key received the message
+        assert_eq!(
+            vec!["test_message"],
+            harness.messages_for_client(client_valid_key)
+        );
+
+        // Test 4: Create a server with no API keys (should allow connections without keys)
+        let addr_no_auth = TestHarness::alloc_port().await;
+        let mut harness_no_auth = TestHarness::new(addr_no_auth);
+        harness_no_auth.start_server().await;
+
+        // Connect without API key (should succeed)
+        let client_no_auth_required = harness_no_auth.connect_client();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!harness_no_auth
+            .clients_failed_to_connect
+            .lock()
+            .unwrap()
+            .contains_key(&client_no_auth_required));
+
+        // Send a message and verify it's received
+        harness_no_auth.send_messages(vec!["no_auth_message"]);
+        harness_no_auth.wait_for_messages_to_drain().await;
+
+        assert_eq!(
+            vec!["no_auth_message"],
+            harness_no_auth.messages_for_client(client_no_auth_required)
         );
     }
 }

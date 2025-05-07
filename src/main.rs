@@ -118,12 +118,7 @@ struct Args {
     )]
     redis_key_prefix: String,
 
-    #[arg(
-        long,
-        env,
-        value_delimiter = ',',
-        help = "API keys to allow"
-    )]
+    #[arg(long, env, value_delimiter = ',', help = "API keys to allow")]
     api_keys: Vec<String>,
 }
 
