@@ -338,7 +338,7 @@ mod test {
             .contains_key(&client_no_key));
 
         // Test 2: Connect with valid API key (should succeed)
-        let client_valid_key = harness.connect_client_with_key(Some("".to_string()));
+        let client_valid_key = harness.connect_client_with_key(Some("valid_key1".to_string()));
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(!harness
             .clients_failed_to_connect

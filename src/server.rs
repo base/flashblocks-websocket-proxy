@@ -9,6 +9,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Error, Router};
 use http::{HeaderMap, HeaderValue};
+use metrics::counter;
 use serde_json::json;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -145,7 +146,7 @@ fn handle_websocket_connection(
     ws: WebSocketUpgrade,
     addr: SocketAddr,
     headers: HeaderMap,
-    _api_key: Option<String>, // Could be used for client tracking or rate limiting
+    api_key: Option<String>, // Track this API key in metrics
 ) -> Response {
     let connect_addr = addr.ip();
 
@@ -165,6 +166,20 @@ fn handle_websocket_connection(
                 .unwrap();
         }
     };
+
+    // Record API key usage with a label for tracking
+    let key_value = match api_key.clone() {
+        Some(key) => {
+            // For security, only use the first 8 chars of the API key in metrics
+            if key.len() > 8 {
+                format!("{}...", &key[0..8])
+            } else {
+                key
+            }
+        },
+        None => "none".to_string(),
+    };
+    counter!("websocket_proxy.connections_by_api_key", "key" => key_value).increment(1);
 
     ws.on_failed_upgrade(move |e: Error| {
         info!(
