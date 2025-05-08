@@ -22,7 +22,7 @@ use std::sync::Arc;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, trace, warn, Level};
+use tracing::{debug, error, info, trace, warn, Level};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -142,6 +142,8 @@ async fn main() {
             .with_ansi(false)
             .init();
     }
+
+    debug!(message = "API keys", keys = ?args.api_keys);
 
     if args.metrics {
         info!(
