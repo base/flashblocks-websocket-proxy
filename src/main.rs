@@ -262,8 +262,6 @@ async fn main() {
         }
     };
 
-    info!(message = "API keys", keys = ?args.api_keys);
-
     let server = Server::new(
         args.listen_addr,
         registry.clone(),
