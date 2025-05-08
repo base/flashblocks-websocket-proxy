@@ -22,7 +22,7 @@ use std::sync::Arc;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, trace, warn, Level};
+use tracing::{debug, error, info, trace, warn, Level};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -117,6 +117,9 @@ struct Args {
         help = "Prefix for Redis keys"
     )]
     redis_key_prefix: String,
+
+    #[arg(long, env, value_delimiter = ',', help = "API keys to allow")]
+    api_keys: Vec<String>,
 }
 
 #[tokio::main]
@@ -126,6 +129,7 @@ async fn main() {
 
     let log_format = args.log_format.to_lowercase();
     let log_level = args.log_level.to_string();
+    let log_level_display = log_level.clone();
 
     if log_format == "json" {
         tracing_subscriber::fmt()
@@ -139,6 +143,9 @@ async fn main() {
             .with_ansi(false)
             .init();
     }
+
+    info!(message = "log level", level = log_level_display);
+    debug!(message = "API keys", keys = ?args.api_keys);
 
     if args.metrics {
         info!(
@@ -265,6 +272,7 @@ async fn main() {
         metrics,
         rate_limiter,
         args.ip_addr_http_header,
+        args.api_keys,
     );
     let server_task = server.listen(token.clone());
 

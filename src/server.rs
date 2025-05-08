@@ -3,12 +3,13 @@ use crate::metrics::Metrics;
 use crate::rate_limit::{RateLimit, RateLimitError};
 use crate::registry::Registry;
 use axum::body::Body;
-use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, Path, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Error, Router};
 use http::{HeaderMap, HeaderValue};
+use metrics::counter;
 use serde_json::json;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -21,6 +22,7 @@ struct ServerState {
     rate_limiter: Arc<dyn RateLimit>,
     metrics: Arc<Metrics>,
     ip_addr_http_header: String,
+    api_keys: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -30,6 +32,7 @@ pub struct Server {
     rate_limiter: Arc<dyn RateLimit>,
     metrics: Arc<Metrics>,
     ip_addr_http_header: String,
+    api_keys: Vec<String>,
 }
 
 impl Server {
@@ -39,6 +42,7 @@ impl Server {
         metrics: Arc<Metrics>,
         rate_limiter: Arc<dyn RateLimit>,
         ip_addr_http_header: String,
+        api_keys: Vec<String>,
     ) -> Self {
         Self {
             listen_addr,
@@ -46,19 +50,35 @@ impl Server {
             rate_limiter,
             metrics,
             ip_addr_http_header,
+            api_keys,
         }
     }
 
     pub async fn listen(&self, cancellation_token: CancellationToken) {
-        let router = Router::new()
-            .route("/healthz", get(healthz_handler))
-            .route("/ws", any(websocket_handler))
-            .with_state(ServerState {
-                registry: self.registry.clone(),
-                rate_limiter: self.rate_limiter.clone(),
-                metrics: self.metrics.clone(),
-                ip_addr_http_header: self.ip_addr_http_header.clone(),
-            });
+        let server_state = ServerState {
+            registry: self.registry.clone(),
+            rate_limiter: self.rate_limiter.clone(),
+            metrics: self.metrics.clone(),
+            ip_addr_http_header: self.ip_addr_http_header.clone(),
+            api_keys: self.api_keys.clone(),
+        };
+
+        let router = if self.api_keys.is_empty() {
+            info!(message = "API key authentication is disabled");
+            Router::new()
+                .route("/healthz", get(healthz_handler))
+                .route("/ws", any(websocket_handler))
+                .with_state(server_state)
+        } else {
+            info!(
+                message = "API key authentication is enabled",
+                key_count = self.api_keys.len()
+            );
+            Router::new()
+                .route("/healthz", get(healthz_handler))
+                .route("/ws/{api_key}", any(websocket_handler_with_key))
+                .with_state(server_state)
+        };
 
         let listener = tokio::net::TcpListener::bind(self.listen_addr)
             .await
@@ -88,7 +108,39 @@ async fn websocket_handler(
     ws: WebSocketUpgrade,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-) -> impl IntoResponse {
+) -> Response {
+    handle_websocket_connection(state, ws, addr, headers, None)
+}
+
+async fn websocket_handler_with_key(
+    State(state): State<ServerState>,
+    ws: WebSocketUpgrade,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(api_key): Path<String>,
+) -> Response {
+    // If API keys are required, validate the provided key
+    if !state.api_keys.contains(&api_key) {
+        state.metrics.unauthorized_requests.increment(1);
+        return Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .body(Body::from(
+                json!({"message": "Invalid API key"}).to_string(),
+            ))
+            .unwrap();
+    }
+
+    handle_websocket_connection(state, ws, addr, headers, Some(api_key))
+}
+
+// Common handler logic for both authenticated and unauthenticated paths
+fn handle_websocket_connection(
+    state: ServerState,
+    ws: WebSocketUpgrade,
+    addr: SocketAddr,
+    headers: HeaderMap,
+    api_key: Option<String>, // Track this API key in metrics
+) -> Response {
     let connect_addr = addr.ip();
 
     let client_addr = match headers.get(state.ip_addr_http_header) {
@@ -107,6 +159,20 @@ async fn websocket_handler(
                 .unwrap();
         }
     };
+
+    // Record API key usage with a label for tracking
+    let key_value = match api_key.clone() {
+        Some(key) => {
+            // For security, only use the first 8 chars of the API key in metrics
+            if key.len() > 8 {
+                format!("{}...", &key[0..8])
+            } else {
+                key
+            }
+        }
+        None => "none".to_string(),
+    };
+    counter!("websocket_proxy.connections_by_api_key", "key" => key_value).increment(1);
 
     ws.on_failed_upgrade(move |e: Error| {
         info!(
