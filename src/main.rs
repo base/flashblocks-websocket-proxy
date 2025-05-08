@@ -129,6 +129,7 @@ async fn main() {
 
     let log_format = args.log_format.to_lowercase();
     let log_level = args.log_level.to_string();
+    let log_level_display = log_level.clone();
 
     if log_format == "json" {
         tracing_subscriber::fmt()
@@ -143,7 +144,7 @@ async fn main() {
             .init();
     }
 
-    info!(message = "log level", level = log_level);
+    info!(message = "log level", level = log_level_display);
     debug!(message = "API keys", keys = ?args.api_keys);
 
     if args.metrics {
