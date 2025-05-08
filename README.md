@@ -1,17 +1,17 @@
 # Flashblocks Websocket Proxy
 
-## Overview
-
-The Flashblocks Websocket Proxy is a service that subscribes to new Flashblocks from
-[rollup-boost](https://github.com/flashbots/rollup-boost) on the sequencer. Then broadcasts them out to any downstream
-RPC nodes. Minimizing the number of connections to the sequencer and restricting access.
-
 > ⚠️ **Warning**
 >
 > This is currently alpha software -- deploy at your own risk!
 >
 > Currently, this project is a one-directional generic websocket proxy. It doesn't inspect any data or validate clients.
 > This may not always be the case.
+
+## Overview
+
+The Flashblocks Websocket Proxy is a service that subscribes to new Flashblocks from
+[rollup-boost](https://github.com/flashbots/rollup-boost) on the sequencer. Then broadcasts them out to any downstream
+RPC nodes. Minimizing the number of connections to the sequencer and restricting access.
 
 <!-- Badge row 1 - status -->
 
