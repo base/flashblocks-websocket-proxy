@@ -143,6 +143,7 @@ async fn main() {
             .init();
     }
 
+    info!(message = "log level", level = log_level);
     debug!(message = "API keys", keys = ?args.api_keys);
 
     if args.metrics {
